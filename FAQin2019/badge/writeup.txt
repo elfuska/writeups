@@ -1,1 +1,492 @@
+|=-----------------------------------------------------------------------=|
+|=--------------=[ FAQin 2019 badge challenge writeup ]=-----------------=|
+|=------------------=[ A tragicomedy in 0x04 acts ]=---------------------=|
+|=---------------------------=[ by Fuska ]=------------------------------=|
+|=-----------------------------------------------------------------------=|
 
+
+--[ Act 0x01: The (Lord of the) NFC badge
+
+          "Three Cards for the Elven-kings under the sky,
+          Seven for the Dwarf-lords in their halls of stone,
+          Nine for Mortal Men doomed to die,
+          One for the Dark Lord on his dark throne
+          In the Land of Mordor where the Shadows lie.
+          One Card to rule them all, One Card to find them,
+          One Card to bring them all and in the darkness bind them
+          In the Land of Mordor where the Shadows lie."
+          J.R.R. Tolkien - The Lord of the Cards
+
+
+  Challenge starts with a card. The skull stamped on it hints about bad 
+things to come. Throwing it into fire probably will reveal on its surface 
+obscure characters from an old and cursed language. It has also a NFC sign,
+pointing us the right way to summon the devil inside the card...
+ 
+  We've got no keys and no hints, so chances are that the card is 
+vulnerable to the "darkside attack" [1] or has a known key. I had an old 
+proxmark3, so I tried the attack on the card waiting for a key to appear, 
+and... no luck:
+
+
+mifare> hf mf mifare
+
+  So proxmark doesn't detect card's RNG as vulnerable to darkside attack 
+(after some googling, I found that old proxmarks doesn't work well with new
+chinese cards). Bruteforcing a 6 bytes key with my old proxmark would have 
+take me too long, there must be an obvious key at some place. So first I 
+tried the most common mifare keys [4]... but again, no luck. Then I looked 
+at the card, trying to find some sentence or some hidden hint to figure out 
+a valid key:
+
+ - "The card had the words 'The badge is a lie' on it. Maybe this is a 
+   hint... I will try different combinations of the words as a key."
+ - "Ok, maybe with the words backwards..."
+ - "Nope. Ok, let's try with the letters backwards"
+ - "And what if I try all the possible keys starting with 'lie'?"
+ - "Well, maybe I can try all the 6-letter words from a dictionary"
+ - FUUUUUUCK!
+   
+  Back to the beginning. It couldn't be sooo complicated, Darkside attack
+had to be the way to go. And at this point I realized that my proxmark was
+probably buggy. I tried flashing unofficial firmwares (Iceman's [2], RFID 
+Research Group's [3]), different firmware versions, FPGA images from 
+different dates... I got different results, but all incorrect. 
+
+  Anger, despair, emptiness... The idea of throwing the card into the fire 
+was more present than ever in my mind. Who knows, maybe the key was written 
+on the plastic with some kind of special ink... And the days became darker, 
+and the card was forgotten inside a drawer waiting for brighter days to 
+come.
+
+  And the day finally arrived! Bitsniper, in his great merciness and 
+wisdom, leaked one of the keys. "Let him that hath understanding count the
+number of the key: for it is the number of a man; and his number 
+is 0x666dd3de6cc1"
+
+  With the leaked key I was able to launch a nested attack [5] with my 
+proxmark and recover all the keys and card contents. 
+
+mifare> hf mf nested
+
+  "Everything will be ok now, hardest part is done" I thought. At that 
+moment I didn't realize that the road to Mordor had just begun. 
+
+
+--[ Act 0x02: Bytes, bytes, bytes
+
+          "Bytes bytes bytes, I'm looking for a good time
+          Bytes bytes bytes, get ready for my love
+          Bytes bytes bytes, I'm looking for a good time
+          Bytes bytes bytes, I'm ready for your love"
+          Sabrina Salerno - Bytes, bytes, bytes
+
+  So far, so good... I had 1024 bytes and a good dose of optimism. The 
+badge is a MIFARE Classic 1K card. That means the card is capable of 
+storing 1K of data, and that's quite a lot of space for storing a flag. 
+So... where do I start?
+
+  This is the MIFARE memory layout for a 1K card:
+
+              +--------------------+--------+-----------------+
+Sector  Block | 0| 1| 2| 3| 4| 5| 6| 7| 8| 9|10|11|12|13|14|15|
++-----+-------+--------------------+--------+-----------------+
+| 0   | 0     |                Manufacturer data              |
+|     +-------+--------------------+--------+-----------------+
+|     | 1     |                    |        |                 |
+|     +-------+--------------------+--------+-----------------+
+|     | 2     |                    |        |                 |
+|     +-------+--------------------+--------+-----------------+
+|     |       |        Key A       | Access |      Key B      |
+|     | 3     |      (6 bytes)     | Cond.  |    (6 bytes)    |
++-----+-------+--------------------+--------+-----------------+
+| 1   | 0     |                    |        |                 |
+|     +-------+--------------------+--------+-----------------+
+|     | 1     |                    |        |                 |
+|     +-------+--------------------+--------+-----------------+
+|     | 2     |                    |        |                 |
+|     +-------+--------------------+--------+-----------------+
+|     |       |        Key A       | Access |      Key B      |
+|     | 3     |      (6 bytes)     | Cond.  |    (6 bytes)    |
++-----+-------+--------------------+--------+-----------------+
+
+....
+
+| 15  | 0     |                    |        |                 |
+|     +-------+--------------------+--------+-----------------+
+|     | 1     |                    |        |                 |
+|     +-------+--------------------+--------+-----------------+
+|     | 2     |                    |        |                 |
+|     +-------+--------------------+--------+-----------------+
+|     |       |        Key A       | Access |      Key B      |
+|     | 3     |      (6 bytes)     | Cond.  |    (6 bytes)    |
++-----+-------+--------------------+--------+-----------------+
+
+  Basically we have 16 sectors, each of them divided in 4 blocks of 16
+bytes each. Some blocks are special, like block 0 of the card (that stores
+vendor information) or the 4th block of each sector (that stores the keys
+and the conditions for accessing that sector). The badge dump looked like
+this:
+
+
+00000000: 6aac 491a 9508 0400 6263 6465 6667 6869  j.I.....bcdefghi
+00000010: abbc 1c0e 86e6 0e97 e60e c5e7 5908 9bd6  ............Y...
+00000020: 265f e6e7 154c 5938 9b5f c6e6 154c 661f  &_...LY8._...Lf.
+00000030: 564a 0c9b 9ef7 0877 8f69 043a f4e1 e893  VJ.....w.i.:....
+
+00000040: fe92 0558 899b 0e8e e65e 089b 0e93 e60e  ...X.....^......
+00000050: 8de6 5808 9b66 dae6 9234 5808 9b59 949b  ..X..f...4X..Y..
+00000060: 0e71 e6e9 641a e659 909b 0e6b e659 989b  .q..d..Y...k.Y..
+00000070: 2c83 b099 3c87 0877 8f69 497c e436 8088  ,...<..w.iI|.6..
+
+00000080: e964 02e6 599c 9b0e 66e6 5977 9be9 6431  .d..Y...f.Yw..d1
+00000090: e60e 6be6 0d40 5ee5 e62b f60e e7e6 255e  ..k..@^..+....%^
+000000a0: c6ef 5fe6 f655 e42b f625 0e0f 195e c6ef  .._..U.+.%...^..
+000000b0: 77d7 f74b 4bc3 0877 8f69 4475 03e3 eba7  w..KK..w.iDu....
+....
+
+  I was unable to find any known structure or "magic bytes" in the data, 
+so I supposed it was somehow encrypted. I tend to use online tools, and 
+Cyberchef was useful to me in the past, so I used it to bruteforce the XOR
+key... and again no luck (later on I realized Cyberchef was showing me only
+the first chars of the deciphered bytes, so I didn't notice any of the 
+strings that were in fact xored right there).
+
+  "Hey, once I got the dump this was suposed to be easy!" I thought Ok, 
+let's try something:
+
+  - "Maybe there's something hidden in the keys". And I xored them, put 
+    them backwards, tried to extract valid characters from them...
+  - "Maybe the dump is not so important". And I tried sending obscure 
+    mifare commands from my proxmark to the card, waiting for a flag in the
+    answer.
+  - "Maybe it's some kind of steganography challenge". And I tried to find 
+    patterns inside the sea of bytes.
+
+  At this point you probably see a pattern here: my first idea use to be
+the right one, but stupid mistakes usually make me discard the right idea
+and follow the wrong path for days. But if you think this is getting 
+ridiculous: wait, there's more to come!
+
+Oh, and the card was thrown into the drawer again.
+
+
+--[ Act 0x03: Tales from the PIT
+
+          "And those who were seen dancing were thought to be insane 
+          by those who could not hear the music"
+          Wrongly attributed to Friedrich Nietzsche (Jean Giraudoux?)
+
+  After some time I mustered the courage to open the dump again. Two (yes,
+TWO) days later, I realized that the byte 0xe6 was suspiciously present all
+over the dump. After xoring the data with 0xe6 I could finally see some
+strings:
+
+FAQin OS v42
+cmd: hlt, hlp, inf
+M{OS}C - MIFARE
+-f OS Challenge
+By @bitsniper
+Hello world Lara!
+ E#r'   $
+key=0x69
+ZQ_;
+ZE*y
+
+  Hurray!! That "key=0x69" was promising, so I xored the already xored dump
+(Matrioska, anyone?) and some more strings appeared:
+ 
+qemu-system-i386 -soundhw pcspk -fda boot.bin
+
+  Wow! I had a bootloader and this was the command to run it! I removed the 
+first 16 bytes of the dump (remember, the manufacturer data) until "MZ" 
+header was at offset 0:
+
+00000000: 4d5a fae8 6000 e871 00e8 2301 bfee 7d30  MZ..`..q..#...}0
+00000010: c0b9 0001 f3aa bfde 7db9 2000 f3aa 80f9  ........}. .....
+00000020: b0ac ea7d 7811 ee91 698f e2dc 1207 0e75  ...}x...i......u
+00000030: 1874 e3be 6f7d e868 00b8 ee7d e875 00e8  .t..o}.h...}.u..
+00000040: 6b00 beee 7d80 3c00 74d2 beee 7dbf 727d  k...}.<.t...}.r}
+00000050: e897 000f 82fc 00bf 767d e88d 00bf 7e7d  ........v}....~}
+00000060: ca65 567f da61 ee91 698f af9a 02d0 666e  .eV..a..i.....fn
+00000070: 0f82 e400 bf7a 7de8 8000 bf91 7d0f 82d7  .....z}.....}...
+00000080: 00e8 8d00 eba6 b803 00cd 10e8 0100 c3b8  ................
+
+$ file dumpdata_decrypted.raw
+dumpdata_decrypted.raw: MS-DOS executable
+
+  So I launched qemu... and failed. I took me some days, several 
+disassembly sessions, and a tweet from @thekix showing a screenshot of his
+dump, to realize that my dump had some bytes that shouldn't be there. If 
+you remember the MIFARE memory layout, keys are part of card data. So 
+obviously when I dumped the card, I didn't get just the challenge data, but
+also the bytes from the special blocks. I had already removed the 
+manufacturer data (first 16 bytes of the dump). Now I had to remove the 
+keys and access conditions from the dump, too. After removing those damn 
+bytes, it looked much better:
+
+$ file dumpdata_decrypted.bin
+dumpdata_decrypted.bin: DOS/MBR boot sector
+
+  With the bytes from the keys removed from the bootloader, qemu started 
+without problems and I could attach the debugger and take a look inside. 
+The code was pretty simple (bootloaders base address is 0x7c00):
+
+
+[0x00007cf1]>  # this_is_the_important_part ();
+        ┌────────────────────────────────────────┐
+        │  0x7cf1                                │
+        │ ;-- fcn.00007cf1:                      │
+        │ 62: this_is_the_important_part ();     │
+        │ mov dl, byte [si]                      │
+        │ mov dh, byte [si + 1]                  │
+        │ ; First 2 bytes of user command in DX  │
+        │ xor si, si                             │
+        │ mov cx, 8      ; counter               │
+        │ mov si, 0x7dce ; xored flag            │
+        └────────────────────────────────────────┘
+            v
+            │
+       ┌────┘
+┌────────┐
+│      │ │
+│┌──────────────────────────────────────────────────────┐
+││  0x7cfe                                              │
+││ cmp si, cx  ; do we already have our 8 bytes?        │
+││ je 0x7d12                                            │
+│└──────────────────────────────────────────────────────┘
+│        f t
+│        │ │
+│        │ └────────────────────────────┐
+│        └──────┐                       │
+│               │                       │
+│           ┌──────────────────────┐    │
+│           │  0x7d02              │    │
+│           │ mov ax, word [si]    │    │
+│           │ ; flag ^ 1st 2 bytes │    │
+│           │ xor ah, dh           │    │
+│           │ xor al, dl           │    │
+│           │ call play_tone;[oa]  │    │
+│           │ call get_key;[ob]    │    │
+│           │ inc si               │    │
+│           │ inc si               │    │
+│           │ ; next 2 flag bytes  │    │
+│           │ loop 0x7cfe          │    │
+│           └──────────────────────┘    │
+│                 t f                   │
+│                 │ │                   │
+└─────────────────┘ │                   │
+          ┌─────────┘                   │
+          │ ┌───────────────────────────┘
+          │ │
+    ┌──────────────────────────────────────────────────────┐
+    │  0x7d12                                              │
+    │  Stop speaker and restart                            │
+    └──────────────────────────────────────────────────────┘
+
+
+  It just prompts the user for a command, takes the first 2 bytes of it, 
+and XORs with them the 16 bytes of the flag at 0x7dce (bd 20 fa 3b bd 20 45
+23 72 27 09 24 c9 21 bd 20). The xored bytes are then sent in AX 
+register to PC speaker calling "play_tone" function. The "play_tone" 
+function looks like this:
+
+    ┌──────────────────────────────────────────────────────┐
+    │ pushaw                                               │
+    │ mov cx, ax                                           │
+    │ mov al, 0xb6                                         │
+    │ out 0x43, al                                         │
+    │ mov ax, cx                                           │
+    │ out 0x42, al                                         │
+    │ mov al, ah                                           │
+    │ out 0x42, al                                         │
+    │ in al, 0x61                                          │
+    │ or al, 3                                             │
+    │ out 0x61, al                                         │
+    │ popaw                                                │
+    │ ret                                                  │
+    └──────────────────────────────────────────────────────┘
+
+  To know what those in and out commands mean, we must take a look at the
+Programmable Interval Timer (PIT) [6]. Basically the two bytes stored in AX
+are used to produce a tone using the PC speaker. How the tones are created?
+First we need to know the frequency of the note we want. Then apply the 
+formula [7]:
+
+ax = (PIT frequency )/( frequency you want)
+
+and then send the bytes in the right order to PIT's channel 2 (0x42):
+out 0x42, 0xff & ax --> LSB
+out 0x42, ax >> 8   --> MSB
+
+  And that's pretty much what the bootloader did.
+
+  Well.... great.... I had a bootloader that can play chiptunes. Nice. I 
+already have a Casio PT-10 but this.... I mean... WHERE THE FUCKING HELL IS
+THE DAMN FLAG FOR FUCK'S SAKE??!!! THIS WAS SUPPOSED TO BE THE EASY PART, 
+IS JUST A 700 FUCKING BYTES PROGRAM!!! C'MON GIVE ME A FUCKING BREAK I 
+ALREADY HATE THIS CHALLENGE AAAAAAAAAHHHHH!!!!1!!
+
+
+--[ Act 0x04: Madness
+
+         "Among the agonies of these after days is that chief of torments —
+         inarticulateness. What I learned and saw in those hours of impious
+         exploration can never be told — for want of symbols or suggestions
+         in any language." 
+         H.P. Lovecraft - Hypnos
+
+
+  Okok, calm down. There must be something hidden in the tones:
+
+  - Are those DTMF tones? Nope!
+  - Are those musical notes? I checked the flag bytes looking for 
+    frequencies but didn't find anything obvious (FAIL!!).
+  - Is it some kind of radio transmission? Not enough bytes.
+  
+  Well, so no positive results with the most obvious things to try. Let's
+try then some stupid things that are probably way too complicated and won't
+work. Are the tones really that important? Oh, probably not... And from 
+here on I descended into the realm of madness trying to enter into 
+bitsniper mind. I left the tones appart, bruteforced the xor key, and 
+looked for meaningful data in every single possible bytes combination. 
+Several days later I was like:
+
+  - "This seems like a coordinate, maybe the answer is a place"
+  - "Oh, look, those bytes are valid unicode" 
+  - "Hey, bitsniper likes russian stuff, so let's look for cyrilic chars"
+
+  My beard was growing by the minutes, my mind was confused, I could barely
+focus on anything not related to the challenge. I was constantly thinking 
+on bizarre operations that could be applied to the bytes. My wife started 
+looking at me with a mix of compassion and horror. I needed help.
+
+  So I begged bitsniper for some hint. And bitsnipper put me on the right
+path bringing to my attention that maybe... MAYBE... the tones were not 
+causal and played an important role in the challenge. So I began working 
+with the tones again. I took all the combinations I got in my previous xor
+bruteforce attempt, but instead of focusing on the bytes, I focused on the
+tones. I coded a program to recover the note associated with a given 
+frequency. Then I discarded the bytes that didn't produced "pure" notes, 
+and and yes! Contrary to what I expected, there was an unique solution to
+the challenge:
+
+Using key 0x2a2a (**): ACABFEGA
+
+  I double-checked the solution putting "**" in the bootloader and checking
+the notes with the help of a phone application. I got 8 perfect notes, so 
+that must be the flag I was looking for (and yes, All cats are beautiful).
+
+
+--[ 0x05: Lessons learned and thanks
+
+  - Hints: There are subbtle hints, and there are hints that speak volumes.
+    The line "qemu-system-i386 -soundhw pcspk -fda boot.bin" stands clearly
+    that sound is important for the challenge. I should have focused on 
+    them from the very begining.
+  - If a way to solve a challenge seems too complicated, probably it's not
+    the right way to solve the challenge.
+
+  Thanks to bitsniper, it was a great challenge. Now that it's completed, 
+I see all the stupid things I tried and all the hints I left behind (the 
+importance of setting up the speaker in qemu, the bootloader version (FAQin
+OS v42 , 42=0x2a) ...). 
+
+
+--[ 0x06: The code
+
+  This is the program I used to detect notes from frequencies. I "borrowed"
+most of the code from AudioLazy python module. I wasn't able to use it 
+directly because I needed to fine tune the tolerance in the note 
+recognition process. By default, AudioLazy module is very accurate 
+regarding the frequency of the notes. With this accuracy level, I couldn't
+find any "pure" note. But increasing the "error tolerance" from 0.0001 to 
+0.01 gave me an unique solution.
+
+  As we previously saw on [7] "AX = (PIT frequency )/(frequency you want)".
+So knowing the contents of AX we are able to extract the frequency used to 
+produce the tone and calculate the note that corresponds to that frequency 
+using the formula "frequency = (PIT frequency) / (xored bytes)".
+
+  Then I just repeated the process with all the possible combinations of 2
+printable characters (the key must be entered through the keyboard), and 
+done!
+
+
+#!/usr/bin/env python3
+from math import log2
+
+# Based on AudioLazy module (https://pythonhosted.org/audiolazy/index.html)
+FREQ_A4 = 440.   # Hz
+
+# https://en.wikibooks.org/wiki/X86_Assembly/Programmable_Interval_Timer
+PIT_FREQ = 0x1234de
+
+# Bytes taken from card dump
+bytes_from_badge = [0x20bd,0x3bfa,0x20bd,0x2345,0x2772,0x2409,0x21c9,0x20bd]
+
+
+# Based on AudioLazy module (https://pythonhosted.org/audiolazy/index.html)
+def midi2str(midi_number):
+    num = midi_number - (4 * 12 - 9)
+    note = (num + .5) % 12 - .5
+    rnote = int(round(note))
+    error = note - rnote
+    names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    names = names[rnote]
+    # Modified from error < 1e-4 to reduce the "sensitivity" (this is the 
+    # reason why I can't use Audiolazy module directly)
+    if abs(error) < 1e-2:
+        return names
+    else:
+        # This is not a "pure" note
+        return "KK"
+
+# Based on AudioLazy module (https://pythonhosted.org/audiolazy/index.html)
+def freq2note(freq):
+    return midi2str(12 * (log2(freq) - log2(FREQ_A4)))
+
+
+if __name__ == "__main__":
+    # We only care about printable chars range (0x20-0x7e)
+    #
+    # As we already have the bytes sent to PIT's channel 2 (bytes from the
+    # badge xored with the unknown key ), we must calculate the frequencies
+    # associated with them. According to the formula:
+    #
+    #   counter = (PIT frequency )/( frequency you want)
+    #
+    # then frequency = (PIT frequency) / (xored bytes from badge)
+    # (http://heim.ifi.uio.no/~inf3150/grupper/1/pcspeaker.html)
+    for i in range (0x2000,0x7eff):
+        notes = ""
+        for bytes in bytes_from_badge:
+            try:
+                notes += freq2note(PIT_FREQ / (bytes ^ i))
+            except:
+                pass
+
+        # Print only frequencies that resulted in "pure" notes
+        if (notes.find('KK') == -1):
+            print ("Using key %s (%c%c): %s" %  (
+             hex(i), 
+             chr(int(hex(i)[2:4], 16)), 
+             chr(int(hex(i)[4:6], 16)),
+             notes
+            ))
+
+
+--[ 0x07: References
+
+[1] The dark side of Security by Obscurity (Nicolas T. Courtois) 
+    https://eprint.iacr.org/2009/137.pdf
+[2] Iceman's Proxmark3 firmware - https://github.com/iceman1001/proxmark3
+[3] RFID Research Group's firmware - 
+    https://github.com/RfidResearchGroup/proxmark3
+[4] https://github.com/iceman1001/proxmark3/blob/master/client/default_keys.dic
+[5] Wirelessly Pickpocketing a Mifare Classic Card (Radboud University Nijmegen)
+    http://www.cs.ru.nl/~flaviog/publications/Pickpocketing.Mifare.pdf
+[6] Programmable Interval Timmer - 
+    https://en.wikibooks.org/wiki/X86_Assembly/Programmable_Interval_Timer
+[7] Making some noise with the PC speaker! - 
+    http://heim.ifi.uio.no/~inf3150/grupper/1/pcspeaker.html
